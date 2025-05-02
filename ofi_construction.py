@@ -25,7 +25,7 @@ def compute_ofi_features(df: pd.DataFrame, max_depth: int) -> pd.DataFrame:
     # Sort and reset index
     df = df.sort_values(['symbol', 'ts_event']).reset_index(drop=True)
     
-    # Shift previous sizes per symbol and level
+    # Compute previous sizes per symbol and level
     for level in range(max_depth):
         lvl = f"{level:02d}"
         df[f'bid_sz_{lvl}_prev'] = df.groupby('symbol')[f'bid_sz_{lvl}'].shift(1)
@@ -53,20 +53,21 @@ def compute_ofi_features(df: pd.DataFrame, max_depth: int) -> pd.DataFrame:
     pca = PCA(n_components=1)
     df['integrated_ofi'] = pca.fit_transform(ofi_matrix).flatten()
 
-    # Cross-Asset OFI: total minus own per timestamp
-    df['total_integrated'] = df.groupby('ts_event')['integrated_ofi'].transform('sum')
-    df['cross_asset_ofi'] = df['total_integrated'] - df['integrated_ofi']
-    df.drop(columns=['total_integrated'], inplace=True)
-
     # Deduplicate: one row per (symbol, ts_event)
-    agg_funcs = {
+    agg_map = {
         'best_level_ofi': 'first',
         'multi_level_ofi': 'first',
-        'integrated_ofi': 'first',
-        'cross_asset_ofi': 'first'
+        'integrated_ofi': 'first'
     }
-    df_out = df.groupby(['symbol', 'ts_event'], as_index=False).agg(agg_funcs)
-    return df_out
+
+    df_features = df.groupby(['symbol', 'ts_event'], as_index=False).agg(agg_map)
+
+    # Cross-Asset OFI: total minus own per timestamp
+    df_features['cross_asset_ofi'] = (df_features.groupby('ts_event')['integrated_ofi'].transform('sum')
+                                      - df_features['integrated_ofi']
+    )
+
+    return df_features
 
 
 def save_output(df: pd.DataFrame, path: str):
@@ -96,8 +97,7 @@ def main():
         format='%(asctime)s %(levelname)s %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-
-    # Resolve paths relative to script directory
+    
     base_dir = os.path.dirname(os.path.abspath(__file__))
     input_path = os.path.join(base_dir, args.input)
     output_path = os.path.join(base_dir, args.output)
